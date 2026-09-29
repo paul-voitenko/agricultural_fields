@@ -1,0 +1,82 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agricultural_fields
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d agricultural_fields"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/agricultural_fields
+    volumes:
+      - ./app:/code/app
+      - ./migrations:/code/migrations
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  seed:
+    build:
+      context: .
+      target: tools
+    profiles: ["seed"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/agricultural_fields
+    volumes:
+      - ./app:/code/app
+      - ./scripts:/code/scripts
+    entrypoint: ["python", "-m", "scripts.seed_fields"]
+    command: []
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  tests:
+    build:
+      context: .
+      target: test
+    profiles: ["test"]
+    environment:
+      # Tests start their own PostGIS container via the host's Docker daemon; reach its mapped port through the host.
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./app:/code/app
+      - ./migrations:/code/migrations
+      - ./tests:/code/tests
+    entrypoint: ["pytest"]
+    command: []
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/agricultural_fields
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/code/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db-data:

@@ -1,0 +1,90 @@
+# Performance test stack: isolated from the dev stack (own project name, network and database volume).
+# Run with ./perf/run.sh — see README for the knobs.
+name: agricultural-fields-perf
+
+x-database-url: &database-url
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/agricultural_fields
+
+services:
+  db:
+    # Same PostGIS 16-3.4 as the dev stack, but a multi-arch build: postgis/postgis is amd64-only and runs emulated
+    # on Apple Silicon, which made the DB ~4x more CPU-hungry and the numbers meaningless.
+    image: "${PERF_POSTGIS_IMAGE:-imresamu/postgis:16-3.4}"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agricultural_fields
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d agricultural_fields"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          cpus: "${PERF_DB_CPUS:-1}"
+          memory: "${PERF_DB_MEMORY:-1G}"
+
+  migrate:
+    build: .
+    environment: *database-url
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  seed:
+    build:
+      context: .
+      target: tools
+    environment: *database-url
+    entrypoint: ["python", "-m", "scripts.seed_fields"]
+    command: ["--reset", "--count", "${PERF_FIELDS:-50000}"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  app:
+    build: .
+    environment: *database-url
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "${PERF_APP_WORKERS:-1}"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          cpus: "${PERF_APP_CPUS:-1}"
+          memory: "${PERF_APP_MEMORY:-512M}"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+  locust:
+    image: locustio/locust:2.46.6
+    environment:
+      DURATION: "${PERF_DURATION:-30s}"
+      FIND_RATE: "${PERF_FIND_RATE:-100}"
+      LIST_RATE: "${PERF_LIST_RATE:-20}"
+      CREATE_RATE: "${PERF_CREATE_RATE:-5}"
+      GET_RATE: "${PERF_GET_RATE:-20}"
+      RESULTS_DIR: /mnt/results
+    volumes:
+      - ./perf:/mnt/perf:ro
+      - ./perf/results/${PERF_RUN_ID:-manual}:/mnt/results
+    command:
+      - "-f"
+      - "/mnt/perf/locustfile.py"
+      - "--headless"
+      - "--host"
+      - "http://app:8000"
+      - "--only-summary"
+      - "--csv"
+      - "/mnt/results/locust"
+      - "--html"
+      - "/mnt/results/report.html"
+    depends_on:
+      app:
+        condition: service_healthy
