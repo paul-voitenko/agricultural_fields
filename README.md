@@ -67,7 +67,7 @@ Scenarios and thresholds live in [`perf/locustfile.py`](perf/locustfile.py), whi
 - **Scenarios:** find-by-point, list, get-by-id and create all run in parallel. Each gets one user per target request per second, and every user makes one request per second on its own schedule with a random offset, so the load arrives evenly rather than in bursts. Get-by-id samples 1,000 real ids from the list endpoint at startup and also requests unknown ids 5% of the time, which must return 404.
 - **Thresholds, checked at the end:**
   - p95 < 100 ms for find-by-point and get-by-id, < 200 ms for list, < 300 ms for create
-  - DB query time (`query_time_ms`) p95 < 50 ms
+  - Database call time as seen by the app (`query_time_ms`, see [find-by-point](#get-apifieldsfind-by-point--fields-containing-a-point)) p95 < 50 ms
   - < 1 % failed requests
   - ≥ 95 % of the target rate achieved in every scenario (if the server can't keep up, throughput drops)
 - **Exit code:** `./perf/run.sh` exits non-zero if any threshold fails, so it can run in CI.
@@ -82,7 +82,7 @@ Scenarios and thresholds live in [`perf/locustfile.py`](perf/locustfile.py), whi
 | `locust_stats.csv`, `locust_stats_history.csv`, `locust_failures.csv`, `locust_exceptions.csv` | Raw Locust stats; the history file has per-second values |
 | `console.log` | Full Locust output |
 
-Reference run (Apple Silicon, default limits, 50k fields): 145 req/s, **p95 5–7 ms** for find-by-point (DB query p95 3 ms), 5 ms for get-by-id, 13–16 ms for list, 10–14 ms for create; 0 errors.
+Reference run (Apple Silicon, default limits, 50k fields): 145 req/s, **p95 5–7 ms** for find-by-point (`query_time_ms` p95 3 ms), 5 ms for get-by-id, 13–16 ms for list, 10–14 ms for create; 0 errors.
 
 > **Apple Silicon:** `postgis/postgis`, used by the dev stack and the tests, is amd64-only and runs emulated. With the same 1-CPU limit it used about 4.4× more DB CPU, and p95 rose to 2.3 s. That's why the perf stack defaults to a native multi-arch image.
 
@@ -212,7 +212,7 @@ Unknown parameters return 422, so a typo like `?min_aera=` doesn't silently retu
 - **Boundaries:** a point on a field's boundary counts as inside.
 - **Holes:** a point inside a hole doesn't.
 - **`distance_to_center_m`:** the distance on the WGS 84 ellipsoid from the point to the field's centroid, rounded to 0.1 m.
-- **`query_time_ms`:** only the database query time, not the whole HTTP request.
+- **`query_time_ms`:** how long the database call took as seen by the app. That includes waiting for a free pooled connection, the network round trip, executing the SQL and building result objects, but not request parsing or response serialization. On an idle server it's close to the pure SQL time (~1 ms on 50k fields). Under load, waiting for a connection can dominate it.
 
 ### `GET /api/fields/{id}` — field details with full geometry
 

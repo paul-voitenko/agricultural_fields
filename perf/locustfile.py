@@ -32,6 +32,7 @@ FIND_BY_POINT = "GET /api/fields/find-by-point"
 LIST_FIELDS = "GET /api/fields"
 CREATE_FIELD = "POST /api/fields"
 GET_FIELD = "GET /api/fields/{id}"
+# Reported by the app itself: the database call incl. pool wait and round trip, not pure SQL execution time.
 DB_QUERY_TIME = "find-by-point query_time_ms"
 
 # name -> (method, target rps, p95 threshold in ms); the DB metric has no target rate.
